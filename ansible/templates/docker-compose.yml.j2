@@ -1,0 +1,53 @@
+version: '3.9'
+
+services:
+  homeassistant:
+    image: "{{ ha_image }}:{{ ha_version }}"
+    container_name: "{{ ha_container_name }}"
+    restart: unless-stopped
+    privileged: false
+    user: "{{ ha_user }}"
+
+    ports:
+      - "{{ ha_port }}:8123"
+
+    volumes:
+      - homeassistant_data:{{ ha_data_path }}
+      - "{{ ha_logs_path }}:/config/logs"
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+
+    environment:
+      TZ: UTC
+
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8123
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - bridge
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
+
+volumes:
+  homeassistant_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "{{ ha_data_path }}"
+
+networks:
+  bridge:
+    driver: bridge

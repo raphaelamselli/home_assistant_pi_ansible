@@ -1,0 +1,31 @@
+# Generated files
+docker-compose.yml
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# SSD mount points (if logged locally)
+/mnt/ssd/logs/
+/mnt/ssd/homeassistant/logs/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Ansible
+*.retry

@@ -1,0 +1,81 @@
+---
+- name: Upgrade Home Assistant
+  hosts: all
+  become: yes
+
+  vars_files:
+    - vars/main.yml
+
+  pre_tasks:
+    - name: Load .env file
+      slurp:
+        src: "{{ playbook_dir }}/../.env"
+      register: env_file
+      failed_when: false
+
+    - name: Parse .env variables
+      set_fact:
+        ha_version: "{{ (env_file.content | b64decode | regex_search('HA_VERSION=(.+)', '\\1') | first) if env_file.stat is defined and env_file.stat.exists else ha_version_default }}"
+      vars:
+        ha_version_default: "2024.12.0"
+
+    - name: Show upgrade info
+      debug:
+        msg:
+          - "Upgrading Home Assistant to version {{ ha_version }}"
+          - "This will cause brief downtime (~10-30 seconds)"
+
+  tasks:
+    - name: Stop Home Assistant container
+      community.docker.docker_compose_v2:
+        project_src: "{{ playbook_dir }}/.."
+        state: absent
+
+    - name: Pull new Home Assistant image
+      community.docker.docker_image:
+        name: "{{ ha_image }}"
+        tag: "{{ ha_version }}"
+        source: pull
+        force_source: yes
+
+    - name: Start upgraded Home Assistant container
+      community.docker.docker_compose_v2:
+        project_src: "{{ playbook_dir }}/.."
+        state: present
+        pull: never
+      environment:
+        HA_VERSION: "{{ ha_version }}"
+        HA_DATA_PATH: "{{ ha_data_path }}"
+        HA_LOGS_PATH: "{{ ha_logs_path }}"
+        HA_USER: "{{ ha_user }}"
+        HA_PORT: "{{ ha_port }}"
+
+    - name: Wait for Home Assistant to be healthy after upgrade
+      block:
+        - name: Wait for port 8123 to be open
+          wait_for:
+            host: "{{ ansible_host }}"
+            port: "{{ ha_port }}"
+            delay: "{{ healthcheck_delay }}"
+            timeout: "{{ healthcheck_timeout }}"
+
+        - name: Wait for HA web UI to respond
+          uri:
+            url: "http://{{ ansible_host }}:{{ ha_port }}"
+            method: GET
+            status_code:
+              - 200
+              - 301
+            follow_redirects: safe
+          register: ha_ui
+          retries: "{{ healthcheck_retries }}"
+          delay: 2
+          until: ha_ui.status in [200, 301]
+
+        - name: Show upgrade completion
+          debug:
+            msg:
+              - ""
+              - "✓ Home Assistant upgraded to {{ ha_version }}"
+              - "✓ Container is responding on port {{ ha_port }}"
+              - ""

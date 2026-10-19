@@ -1,0 +1,195 @@
+---
+- name: Ensure Python 3 is installed and up-to-date
+  block:
+    - name: Check if Python 3 is installed
+      command: python3 --version
+      register: python_check
+      changed_when: false
+      failed_when: false
+
+    - name: Update Python 3 if needed
+      apt:
+        name: python3
+        state: present
+        update_cache: yes
+      when: python_check.rc != 0 or python_check.stdout is not search("3\.(8|9|10|11|12)")
+
+    - name: Verify Python 3 installation
+      command: python3 --version
+      register: python_version
+      changed_when: false
+
+    - name: Show Python version
+      debug:
+        msg: "Python version: {{ python_version.stdout }}"
+
+- name: Verify Docker and Docker Compose are installed
+  block:
+    - name: Check Docker installation
+      command: docker --version
+      register: docker_check
+      changed_when: false
+      failed_when: docker_check.rc != 0
+
+    - name: Check Docker Compose installation
+      command: docker compose version
+      register: compose_check
+      changed_when: false
+      failed_when: compose_check.rc != 0
+
+    - name: Show Docker versions
+      debug:
+        msg:
+          - "{{ docker_check.stdout }}"
+          - "{{ compose_check.stdout }}"
+
+- name: Create homeassistant user and group
+  block:
+    - name: Create homeassistant group
+      group:
+        name: "{{ ha_group }}"
+        gid: "{{ ha_gid }}"
+        state: present
+
+    - name: Create homeassistant user
+      user:
+        name: "{{ ha_user }}"
+        group: "{{ ha_group }}"
+        uid: "{{ ha_uid }}"
+        home: "/var/lib/homeassistant"
+        shell: /bin/false
+        state: present
+
+    - name: Add user to docker group
+      user:
+        name: "{{ ha_user }}"
+        groups: docker
+        append: yes
+
+- name: Install git
+  apt:
+    name: git
+    state: present
+
+- name: Setup SSD storage directories
+  block:
+    - name: Check if SSD path exists
+      stat:
+        path: "{{ ssd_path }}"
+      register: ssd_stat
+      failed_when: not ssd_stat.stat.exists
+
+    - name: Create HA data directory
+      file:
+        path: "{{ ha_data_path }}"
+        state: directory
+        owner: "{{ ha_user }}"
+        group: "{{ ha_group }}"
+        mode: '0755'
+
+    - name: Create logs directory
+      file:
+        path: "{{ ha_logs_path }}"
+        state: directory
+        owner: "{{ ha_user }}"
+        group: "{{ ha_group }}"
+        mode: '0755'
+
+    - name: Show storage configuration
+      debug:
+        msg:
+          - "Data path: {{ ha_data_path }}"
+          - "Logs path: {{ ha_logs_path }}"
+
+- name: Configure firewall
+  block:
+    - name: Check if ufw is enabled
+      command: ufw status
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    - name: Open port 8123 in ufw
+      ufw:
+        rule: allow
+        port: "{{ ha_port }}"
+        proto: tcp
+      when: ufw_status.stdout is search("active")
+
+    - name: Show firewall status
+      debug:
+        msg: "{{ ufw_status.stdout_lines[0] if ufw_status.stdout_lines else 'ufw not active' }}"
+
+- name: Verify port 8123 is available
+  block:
+    - name: Check if port 8123 is in use
+      command: "netstat -tuln | grep :{{ ha_port }}"
+      register: port_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if port is already in use by another process
+      fail:
+        msg: "Port {{ ha_port }} is already in use by another process. Please free it or change the port."
+      when:
+        - port_check.rc == 0
+        - not port_check.stdout is search(ha_container_name)
+
+- name: Render docker-compose.yml from template
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ playbook_dir }}/../docker-compose.yml"
+    owner: "{{ ansible_user_id }}"
+    group: "{{ ansible_user_gid }}"
+    mode: '0644'
+  register: compose_rendered
+
+- name: Show rendered docker-compose.yml path
+  debug:
+    msg: "Docker Compose file: {{ playbook_dir }}/../docker-compose.yml"
+
+- name: Pull Home Assistant image
+  community.docker.docker_image:
+    name: "{{ ha_image }}"
+    tag: "{{ ha_version }}"
+    source: pull
+    force_source: yes
+
+- name: Ensure docker-compose is up
+  community.docker.docker_compose_v2:
+    project_src: "{{ playbook_dir }}/.."
+    state: present
+    pull: always
+  environment:
+    HA_VERSION: "{{ ha_version }}"
+    HA_DATA_PATH: "{{ ha_data_path }}"
+    HA_LOGS_PATH: "{{ ha_logs_path }}"
+    HA_USER: "{{ ha_user }}"
+    HA_PORT: "{{ ha_port }}"
+
+- name: Wait for Home Assistant to be healthy
+  block:
+    - name: Wait for port 8123 to be open
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ ha_port }}"
+        delay: "{{ healthcheck_delay }}"
+        timeout: "{{ healthcheck_timeout }}"
+      register: port_wait
+
+    - name: Wait for HA web UI to respond
+      uri:
+        url: "http://{{ ansible_host }}:{{ ha_port }}"
+        method: GET
+        status_code:
+          - 200
+          - 301
+        follow_redirects: safe
+      register: ha_ui
+      retries: "{{ healthcheck_retries }}"
+      delay: 2
+      until: ha_ui.status in [200, 301]
+
+    - name: Show healthcheck result
+      debug:
+        msg: "✓ Home Assistant is responding on port {{ ha_port }}"

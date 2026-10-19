@@ -1,0 +1,26 @@
+---
+# Home Assistant configuration
+ha_image: "ghcr.io/home-assistant/home-assistant"
+ha_version: "2024.12.0"  # Override via .env or command line with -e
+ha_container_name: "homeassistant"
+ha_port: 8123
+
+# User and group
+ha_user: "homeassistant"
+ha_group: "homeassistant"
+ha_uid: 1000
+ha_gid: 1000
+
+# Storage paths
+ssd_path: "/mnt/ssd"  # Override via .env or command line with -e
+ssd_path_default: "/mnt/ssd"
+ha_data_path: "{{ ssd_path }}/homeassistant"
+ha_logs_path: "{{ ssd_path }}/logs"
+
+# Docker network
+docker_network_name: "bridge"
+
+# Healthcheck
+healthcheck_timeout: 60
+healthcheck_retries: 30
+healthcheck_delay: 10
